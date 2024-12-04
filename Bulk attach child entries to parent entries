@@ -1,0 +1,122 @@
+/**
+ * Attach Existing Child Entries to Parent Entries using GPNF_Entry (Batch Processing)
+ * Description: Loops through child form entries and attaches them to a parent entry, using Gravity Perks' GPNF_Entry methods with batch processing (50 entries per batch).
+ */
+
+// Parent form ID and Nested Form field ID
+$parent_form_id = 6;
+$nested_form_field_id = 137;
+
+// Child form ID and matching field ID
+$child_form_id = 33;
+$child_match_field_id = 11; // Field containing the Parent Entry ID in child form
+
+// Debug log file path
+$debug_log_file = WP_CONTENT_DIR . '/attach_child_log.txt';
+
+// Function to log messages
+function attach_log( $message ) {
+    global $debug_log_file;
+    $timestamp = date( 'Y-m-d H:i:s' );
+    file_put_contents( $debug_log_file, "[$timestamp] $message\n", FILE_APPEND );
+}
+
+// Attach child entries to parent entry
+// Updated function to fetch all parent entries without pagination limit
+function attach_child_entries_to_parent( $parent_form_id, $nested_form_field_id, $child_form_id, $child_match_field_id ) {
+    attach_log( 'Starting attachment process.' );
+
+    // Set paging to fetch all entries (page_size set to 50 for batch processing)
+    $page_size = 50;
+    $current_page = 1;
+
+    while ( true ) {
+        // Get parent entries with pagination
+        $paging = [
+            'page_size' => $page_size,  // Set the page size
+            'offset'    => ($current_page - 1) * $page_size,
+        ];
+
+        // Fetch parent entries
+        $parent_entries = GFAPI::get_entries( $parent_form_id, [], null, $paging );
+        if ( is_wp_error( $parent_entries ) ) {
+            attach_log( 'Error retrieving parent entries: ' . $parent_entries->get_error_message() );
+            break;
+        }
+
+        if ( empty( $parent_entries ) ) {
+            attach_log( 'No more parent entries to process. Stopping.' );
+            break;
+        }
+
+        attach_log( 'Retrieved ' . count( $parent_entries ) . ' parent entries.' );
+
+        // Loop through all parent entries
+        foreach ( $parent_entries as $parent_entry ) {
+            $parent_entry_id = $parent_entry['id'];
+
+            attach_log( "Processing parent entry ID: $parent_entry_id" );
+
+            // Get matching child entries
+            $search_criteria = [
+                'field_filters' => [
+                    [
+                        'key'   => $child_match_field_id,
+                        'value' => $parent_entry_id,
+                    ],
+                ],
+            ];
+
+            $paging = [
+                'page_size' => 0,  // No limit for child entries
+            ];
+
+            $child_entries = GFAPI::get_entries( $child_form_id, $search_criteria, null, $paging );
+            if ( is_wp_error( $child_entries ) ) {
+                attach_log( "Error retrieving child entries for parent entry ID $parent_entry_id: " . $child_entries->get_error_message() );
+                continue;
+            }
+
+            attach_log( 'Found ' . count( $child_entries ) . " child entries for parent entry ID: $parent_entry_id." );
+
+            // Attach child entries to parent entry
+            foreach ( $child_entries as $child_entry ) {
+                $child_entry_id = $child_entry['id'];
+
+                // Check if the child entry exists (in case it's been deleted or no longer valid)
+                $child_entry = GFAPI::get_entry( $child_entry_id );
+                if ( is_wp_error( $child_entry ) ) {
+                    attach_log( "Child entry ID $child_entry_id no longer exists or is invalid. Skipping." );
+                    continue;
+                }
+
+                attach_log( "Attaching child entry ID $child_entry_id to parent entry ID $parent_entry_id." );
+
+                // Use GPNF_Entry to attach the child entry
+                $gpnf_entry = new GPNF_Entry( $child_entry );
+                $gpnf_entry->set_parent_meta( $parent_form_id, $parent_entry_id );
+                $gpnf_entry->set_nested_form_field( $nested_form_field_id );
+
+                // Save the updated child entry
+                $update_result = GFAPI::update_entry( $gpnf_entry->get_entry() );
+                if ( is_wp_error( $update_result ) ) {
+                    attach_log( "Error updating child entry ID $child_entry_id: " . $update_result->get_error_message() );
+                } else {
+                    attach_log( "Successfully attached child entry ID $child_entry_id to parent entry ID $parent_entry_id." );
+                }
+            }
+        }
+
+        // Move to the next page of parent entries
+        $current_page++;
+    }
+
+    attach_log( 'Attachment process completed.' );
+}
+
+// Trigger the function via URL parameter
+if ( isset( $_GET['trigger_attach_child_entries'] ) && $_GET['trigger_attach_child_entries'] === '12' ) {
+    attach_log( 'Trigger received via URL. Starting process.' );
+    attach_child_entries_to_parent( $parent_form_id, $nested_form_field_id, $child_form_id, $child_match_field_id );
+    attach_log( 'Process finished.' );
+}
